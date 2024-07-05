@@ -1,0 +1,432 @@
+---
+title: "CO2 EMISSIONS DASHBOARD"
+author: "Gbotoso Olaoluwa"
+format: dashboard
+theme: lux
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+# Load packages 
+if(!require(pacman)) install.packages("pacman")
+pacman::p_load(tidyverse, 
+               here,
+               sf,
+               bslib, 
+               bsicons,
+               rnaturalearth, 
+               rnaturalearthdata,
+               plotly, 
+               countrycode, 
+               htmltools, 
+               reactable,
+               janitor
+               )
+
+```
+
+
+```{r}
+# Load data
+
+co2_emission <- read_csv(here("data/co2_terr.csv"))
+world_data <- ne_countries(scale = "medium", returnclass = "sf")
+world_population <- read_csv(here("data/pop.csv"))
+#head(world_data)
+#head(world_population)
+# head(co2_emission)
+```
+
+
+
+
+```{r}
+# Data exploration and cleaning
+# Transform data to long format
+#my_data <- co2_emission %>% 
+  #pivot_longer(cols = 2:ncol(co2_emission), names_to = "Year", values_to = "emission") %>% 
+  #filter(Year >= 1970) %>% 
+  #mutate(emission_last_letter =str_sub(emission, -1, -1)) %>%
+  #select(emission_last_letter) %>% 
+ # table()
+  #mutate(emission = str_replace_all(emission, "k", "e3")) %>% 
+  #mutate(emission = str_replace_all(emission, "M", "e6")) %>% 
+  #mutate(emission = str_replace_all(emission, "B", "e9")) %>% 
+  #mutate(emission = as.numeric(emission)) 
+```
+
+```{r}
+
+#my_data1 <- co2_emission %>%
+  #pivot_longer(cols = 2:ncol(co2_emission), names_to = "Year", values_to = "emission") %>%
+  #filter(as.numeric(Year) >= 1970) %>%
+  #mutate(emission = str_replace_all(emission, "([kKmMbB])", 
+                                    #function(x) {switch(tolower(x),
+                                                       #"k" = "e3",
+                                                       #"m" = "e6",
+                                                       #"b" = "e9")})) %>%
+  #mutate(emission = as.numeric(emission))
+
+```
+
+```{r}
+# Data exploration and cleaning
+# Transform data to long format
+
+co2_emission_clean <- co2_emission %>%
+  pivot_longer(cols = 2:ncol(co2_emission), names_to = "year", values_to = "emission") %>%
+  filter(as.numeric(year) >= 1970) %>%
+  mutate(emission = str_replace_all(emission, "([kKmMbB])", 
+                                    function(x) {
+                                      case_when(
+                                        tolower(x) == "k" ~ "e3",
+                                        tolower(x) == "m" ~ "e6",
+                                        tolower(x) == "b" ~ "e9",
+                                        TRUE ~ x  
+                                      )
+                                    })) %>%
+  mutate(emission = as.numeric(emission), year = as.numeric(year)) %>% 
+  mutate(country_code = countrycode(country, "country.name", "iso3c")) # standardizing country names
+
+
+world_data <- world_data %>% 
+mutate(country_code = countrycode(name, "country.name", "iso3c"))
+
+population_data <- world_population %>% 
+                    select(country, `1970`:`2021`) %>% 
+                    pivot_longer(cols = `1970`:`2021`, names_to = "year", values_to = "population") %>% 
+                    mutate(population = str_replace_all(population, "([KkMmBb])",
+                                                        function(x) {
+                                                                  case_when(
+                                                                    tolower(x) == "k" ~ "e3",
+                                                                    tolower(x) == "m" ~ "e6",
+                                                                    tolower(x) == "b" ~ "e9",
+                                                                    TRUE ~ x)
+                                                        })) %>% 
+                    mutate(population = as.numeric(population), year = as.numeric(year)) %>% 
+                    mutate(country_code = countrycode(country, "country.name", "iso3c"))
+
+# Check for missing data
+#sum(is.na(co2_emission_clean))
+#co2_emission_clean
+
+```
+
+```{r}
+# Joining the two datasets
+# setdiff(co2_emission_clean$country_code, population_data$country_code)
+world_co2_emission_clean <- co2_emission_clean %>% 
+                              left_join(population_data, by = c("year", "country_code")) %>% 
+                              select(-country.y) %>%
+                              rename(country = country.x) %>% 
+                              mutate(emission_per_100k_capita = round(emission/population, 2), continent = countrycode(sourcevar = country,
+                                 origin = "country.name",
+                                 destination = "continent"))
+#names(world_co2_emission_clean)
+```
+
+```{r}
+# Turning the data into sf
+# setdiff(world_data$country_code, co2_emission_clean$country_code )
+
+world_co2_emission_clean_sf <- world_data %>% 
+                              left_join(world_co2_emission_clean, by =  "country_code")
+```
+
+
+
+
+
+
+
+```{r}
+# Metrics for dashboard
+total_global_emissions <- world_co2_emission_clean %>% 
+                          filter(year == 2021) %>% 
+                          summarise(total_emission = round(sum(emission, na.rm = TRUE)/1000000000, 2)) %>% 
+                          pull(total_emission) 
+#total_global_emissions
+
+highest_emission <- world_co2_emission_clean %>% 
+                          filter(year == 2021) %>% 
+                          summarise(maximum_emission = round(max(emission, na.rm = TRUE)/1000000000, 2)) %>%                            pull(maximum_emission) 
+country_with_highest_emission <- world_co2_emission_clean %>% 
+                                  filter(year == 2021) %>% 
+                                  filter(emission == max(emission)) %>% 
+                                  pull(country)
+
+highest_emission_per_capita <- world_co2_emission_clean %>% 
+                          filter(year == 2021) %>% 
+                          summarise(maximum_emission_per_100k_capita =
+                          max(emission_per_100k_capita, na.rm = TRUE)) %>% 
+                          pull(maximum_emission_per_100k_capita) 
+
+country_with_highest_emission_per_capita <- world_co2_emission_clean %>% 
+                                            filter(year == 2021) %>% 
+                                            filter(emission_per_100k_capita == max(emission_per_100k_capita)) %>% 
+                                            pull(country)
+
+
+
+```
+
+
+
+
+
+
+```{r}
+emission_map <- world_co2_emission_clean_sf %>% 
+  filter(year == 2021) %>% 
+  mutate(tooltip_label = paste(country, 
+                               emission, 
+                               sep = ": ")) %>% 
+  ggplot() +
+  geom_sf(aes(fill = emission, text = tooltip_label)) +
+  scale_fill_viridis_c(option = "plasma", na.value = "grey80") +
+  theme_minimal() +
+  theme_void() + 
+  theme(legend.position = "none")
+
+emission_map_plotly <- ggplotly(emission_map, tooltip = "text")
+
+```
+
+```{r}
+top_10_countries_emission <- world_co2_emission_clean %>% 
+  filter(year == 2021) %>% 
+  arrange(-emission) %>% 
+  mutate(tooltip_label = paste(country, 
+                               emission, 
+                               sep = ": ")) %>% 
+  head(10)
+
+top_10_countries_emission_plot <- top_10_countries_emission %>% 
+  ggplot(aes(x=emission, y = reorder(country, emission), text = tooltip_label)) +
+  geom_col(fill = "#518fd6") +
+  theme_minimal() +
+  labs( x = "Emission in Metric Tonnes", y = "") +
+  theme(legend.position = "none")
+
+top_10_countries_emission_plotly <- ggplotly(top_10_countries_emission_plot, tooltip = "text")
+
+
+```
+
+
+```{r}
+top_10_countries <- top_10_countries_emission %>%
+pull(country)
+
+top_10_countries_trend <- world_co2_emission_clean %>%
+  filter(country %in% top_10_countries) %>%
+  ggplot(aes(x = year, y = emission, color = country, group = country)) +
+  #geom_point() +
+  geom_line() +
+  scale_y_log10() +
+  scale_x_continuous(breaks = seq(1970, 2021, by = 10)) +  # Set x-axis breaks at 10-year intervals
+  labs(
+       x = "Year",
+       y = "",
+       color = "Country") +
+  theme_minimal() 
+top_10_countries_trend_plotly <- ggplotly(top_10_countries_trend)
+#line_graph_plotly
+
+```
+
+
+
+
+```{r}
+
+global_trend <- world_co2_emission_clean %>%
+  group_by(year) %>%
+  summarise(global_emissions = sum(emission)) %>% 
+  ggplot(aes(x = year, y = global_emissions)) +
+  #geom_point() +
+  geom_line() +
+  scale_y_log10() +
+  scale_x_continuous(breaks = seq(1970, 2021, by = 10)) +  # Set x-axis breaks at 10-year intervals
+  labs(
+       x = "Year",
+       y = "") +
+  theme_minimal() 
+global_trend_plotly <- ggplotly(global_trend)
+
+
+```
+
+
+
+
+```{r}
+
+
+
+#world_co2_emission_clean$year <- as.numeric(world_co2_emission_clean$year)
+
+ continent_trend <- world_co2_emission_clean %>%
+              group_by(continent, year) %>% 
+              summarise(total_emission = sum(emission)) %>% 
+  #filter(country %in% top_10_countries, year > 2000) %>%
+  ggplot(aes(x = year, y = total_emission, color = continent, group = continent)) +
+  #geom_point() +
+  geom_line() +
+  scale_y_log10() +
+  scale_x_continuous(breaks = seq(1970, 2021, by = 10)) +  # Set x-axis breaks at 10-year intervals
+  labs(
+       x = "Year",
+       y = "",
+       color = "Continent") +
+  theme_minimal() 
+
+continent_trend_plotly <- ggplotly(continent_trend)
+
+```
+
+
+
+
+
+
+
+
+```{r}
+top_10_countries_emission_per_100k_capita <- world_co2_emission_clean %>% 
+  filter(year == 2021) %>% 
+  arrange(-emission_per_100k_capita) %>% 
+  head(10)
+
+top_10_countries_emission_per_100k_capital_plot <- top_10_countries_emission_per_100k_capita %>% 
+  ggplot(aes(x=emission_per_100k_capita, y = reorder(country, emission_per_100k_capita))) +
+  geom_col(fill = "#518fd6") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+top_10_countries_emission_per_100k_capita_plotly <- ggplotly(top_10_countries_emission_per_100k_capital_plot)
+
+#top_20_countries_emission_per_100k_capita_plotly
+
+```
+
+
+# Home
+
+## Row 1 {height=25%}
+```{r}
+value_box(
+  title = "Total Global CO2 Emissions in Gigatonnes 2021",
+  value = total_global_emissions,
+  showcase = bsicons::bs_icon("globe"),
+  theme = value_box_theme(bg = "#00ffff")
+  )
+
+```
+
+```{r}
+value_box(
+  title = "Country with Highest CO2 Emissions in Gigatonnes 2021",
+  value =  paste0(country_with_highest_emission, ": ",highest_emission),
+  showcase = bsicons::bs_icon("arrow-up"),
+  theme = value_box_theme(bg = "#28a745")
+ 
+ 
+)
+```
+
+
+```{r}
+# value_box(
+#   title = "Country with Highest Emission per capita 2021",
+#   value =  highest_emission_per_capita,
+#   showcase = bsicons::bs_icon("bar-chart"),
+#   theme = value_box_theme(bg = "yellow")
+# )
+```
+
+
+
+## Row 2 {height=75%}
+
+### {width=60%}
+
+```{r title = "Map of Countries by CO2 Emissions in Metric Tonnes 2021"}
+emission_map_plotly
+
+```
+### {width=40%}
+
+
+
+```{r title = "Top Ten Countries by CO2 Emissions in Metric Tonnes 2021"}
+top_10_countries_emission_plotly
+```
+
+# CO2 EMISSIONS TREND
+
+## Row 1
+
+### Column 1 {width=50%}
+
+
+#### {height=50%}
+
+```{r title = "Global CO2 EMISSIONS OVER TIME IN METRIC TONNES"}
+
+global_trend_plotly
+
+```
+
+#### {height=50%}
+
+```{r title = "CO2 EMISSIONS BY CONTINENT OVER TIME IN METRIC TONNES"}
+continent_trend_plotly
+
+
+```
+
+
+
+
+### Column 2 {width=50%}
+
+```{r title = "CO2 EMISSIONS BY TOP TEN COUNTRIES 2021 OVER TIME IN METRIC TONNES"}
+top_10_countries_trend
+```
+
+
+
+# DOWNLOAD DATA
+
+The data used in this dashboard focuses on CO2 emissions and is sourced from the Gapminder project. It is shown below and can be downloaded as a CSV
+
+```{r}
+library(htmltools)
+
+htmltools::browsable(
+  tagList(
+    reactable(co2_emission_clean, 
+              elementId = "gapminder-co2-emission-table", 
+              searchable = T, 
+              filterable = T), 
+    
+tags$button("Download as CSV", 
+            onclick = "Reactable.downloadDataCSV('gapminder-co2-emission-table')")
+  )
+)
+```
+
+
+# ABOUT
+
+This data caontains total CO2 emissions by the different countries of the world in metric tonnes from 1970 to 2021, and was sourced from the Gapminder Foundation.
+
+The Gapminder Foundation is a non-profit venture registered in Stockholm, Sweden, that promotes sustainable global development and achievement of the United Nations Millennium Development Goals by increased use and understanding of statistics and other information about social, economic, and environmental development at local, national, and global levels.
+
+Gapminder was founded in 2005 by Ola Rosling, Anna Rosling Rönnlund, and Hans Rosling. The name Gapminder was derived from the "Mind the Gap" warning messages on the London Underground.
+
+An example of one of Hans Rosling's videos is shown below: 
+
+<iframe width="560" height="315" src="https://www.youtube.com/embed/hVimVzgtD6w?si=hjxf5ryxh7mx5A4R" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
